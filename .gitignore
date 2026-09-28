@@ -1,0 +1,44 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+*.pyo
+.coverage
+.pytest_cache/
+htmlcov/
+
+# Teamwork agent working dirs
+.agents/
+
+# Virtual environments
+venv/
+env/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# App output
+*.mp4
+*.avi
+recordings/
+
+# Android / Buildozer
+android/.buildozer/
+android/bin/
+android/logs/
+*.apk
+
+# Secrets
+.env

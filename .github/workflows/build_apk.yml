@@ -1,0 +1,98 @@
+name: Build Android APK & Create Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (e.g. v1.0.0)"
+        required: true
+        default: "v1.0.0"
+
+jobs:
+  build-apk:
+    name: Build APK on Ubuntu
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            git zip unzip openjdk-17-jdk python3-pip \
+            libffi-dev libssl-dev \
+            build-essential ccache \
+            libncurses5 libncurses5-dev libncursesw5 \
+            pkg-config autoconf libtool \
+            zlib1g-dev
+
+      - name: Install Buildozer and Cython
+        run: |
+          pip install --upgrade pip
+          pip install buildozer==1.5.0 cython==0.29.37
+
+      - name: Set up Android SDK/NDK cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.buildozer/android/platform/android-sdk
+            ~/.buildozer/android/platform/android-ndk-*
+          key: android-sdk-ndk-${{ hashFiles('android/buildozer.spec') }}
+          restore-keys: android-sdk-ndk-
+
+      - name: Build APK
+        working-directory: android
+        run: |
+          buildozer android debug 2>&1 | tee build.log
+        env:
+          ACCEPT_ANDROID_SDK_LICENSE: "yes"
+
+      - name: Find APK
+        id: find_apk
+        run: |
+          APK=$(find android/bin -name "*.apk" | head -1)
+          echo "APK_PATH=$APK" >> $GITHUB_OUTPUT
+          echo "APK_NAME=$(basename $APK)" >> $GITHUB_OUTPUT
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepfeik-apk
+          path: ${{ steps.find_apk.outputs.APK_PATH }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
+          name: deepfeik ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
+          body: |
+            ## deepfeik Android APK
+
+            Real-time face swap for Android 10+ (API 29+).
+
+            ### Install
+            1. Download `deepfeik-debug.apk` below
+            2. On your Android device: **Settings → Security → Install unknown apps** → enable
+            3. Open the downloaded APK and install
+            4. Grant camera & storage permissions on first launch
+
+            ### What's inside
+            - Live front camera face swap
+            - Load source face from gallery
+            - MediaPipe FaceMesh + Delaunay warp + LAB color blend
+
+          files: ${{ steps.find_apk.outputs.APK_PATH }}
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

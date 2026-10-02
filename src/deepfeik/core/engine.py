@@ -217,16 +217,29 @@ class FaceSwapEngine:
                 )
                 cv2.fillPoly(target_mask, [scaled_pts.reshape(-1, 1, 2)], 0)
 
-        # 4. LAB Reinhard color matching
+        # 4. Per-frame adaptive skin tone matching.
+        #    Update EMA-smoothed target LAB stats from the live face region so
+        #    the color transfer continuously adapts to the user's current skin
+        #    tone and lighting — fixes the "wrong skin tone" mismatch.
+        #    alpha=0.15 gives slow, smooth adaptation (no per-frame flicker).
+        self._color_matcher.set_target_stats(
+            frame,
+            target_mask,
+            smooth=True,
+            alpha=0.15,
+        )
+
+        # 5. LAB Reinhard color matching (uses the freshly updated EMA target stats)
         warped_matched = self._color_matcher.match(
             warped,
             frame,
             source_mask=target_mask,
             target_mask=target_mask,
             match_source_to_target=True,
+            use_cached_target=True,  # use EMA-smoothed stats, not raw per-frame
         )
 
-        # 5. Feathered alpha blending
+        # 6. Feathered alpha blending
         blended = self._blender.blend(
             warped_matched,
             frame,

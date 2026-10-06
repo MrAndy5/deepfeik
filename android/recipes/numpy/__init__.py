@@ -9,7 +9,7 @@ NUMPY_NDK_MESSAGE = (
 
 class NumpyRecipe(MesonRecipe):
     version = "v2.2.3"
-    url = "git+https://github.com/numpy/numpy@v2.2.3"
+    url = "git+https://github.com/numpy/numpy"
     extra_build_args = ["-Csetup-args=-Dblas=none", "-Csetup-args=-Dlapack=none"]
     need_stl_shared = True
     min_ndk_api_support = 24

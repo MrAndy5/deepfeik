@@ -1,12 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
 import os
 import sys
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_all
 
 block_cipher = None
 
-# Collect all data files and binary models needed by mediapipe and PyQt5
-datas = collect_data_files('mediapipe')
+# Collect all data files, binaries, and hidden imports for mediapipe
+mp_datas, mp_binaries, mp_hidden = collect_all('mediapipe')
+
+datas = mp_datas
+binaries = mp_binaries
 hiddenimports = [
     'PyQt5',
     'PyQt5.QtCore',
@@ -15,6 +18,9 @@ hiddenimports = [
     'cv2',
     'numpy',
     'mediapipe',
+    'mediapipe.python',
+    'mediapipe.python.solutions',
+    'mediapipe.python.solutions.face_mesh',
     'PIL',
     'scipy',
     'scipy.spatial',
@@ -33,12 +39,12 @@ hiddenimports = [
     'deepfeik.gui.main_window',
     'deepfeik.gui.camera_thread',
     'deepfeik.gui.clipboard',
-] + collect_submodules('mediapipe')
+] + mp_hidden
 
 a = Analysis(
     ['src/deepfeik/__main__.py'],
     pathex=['src'],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

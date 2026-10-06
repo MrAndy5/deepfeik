@@ -32,28 +32,23 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller pytest
 
-      - name: Build standalone app with PyInstaller
+      - name: Build standalone app with PyInstaller (Single-File Executable)
         run: |
           pyinstaller --noconfirm deepfeik.spec
 
-      - name: Create Portable Windows Zip
+      - name: Run Automated Standalone Executable Verification Test
         run: |
-          Compress-Archive -Path dist/deepfeik -DestinationPath ./deepfeik-windows-x64-portable.zip
+          python -m pytest tests/test_standalone_app.py -v
 
-      - name: Upload Windows Portable Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: deepfeik-windows-portable
-          path: ./deepfeik-windows-x64-portable.zip
-
-      - name: Attach Windows App to GitHub Release
+      - name: Attach Windows Executable & Installer to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
           name: deepfeik ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
-          files: ./deepfeik-windows-x64-portable.zip
+          files: |
+            dist/deepfeik.exe
           draft: false
           prerelease: false
         env:

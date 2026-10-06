@@ -10,6 +10,8 @@ source.include_patterns = assets/*,deepfeik/**/*
 version = 1.0.0
 requirements = python3==3.11,kivy==2.3.0,opencv==4.8.0,numpy==1.26.0,mediapipe==0.10.14,Pillow==10.4.0
 
+p4a.local_recipes = ./recipes
+
 orientation = portrait
 fullscreen = 0
 

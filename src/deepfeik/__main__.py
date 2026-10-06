@@ -9,28 +9,11 @@ import logging
 import os
 import sys
 
-# Ensure stdout and stderr exist even when packaged as a Windows GUI executable
-if sys.platform == "win32":
-    try:
-        import ctypes
-        if ctypes.windll.kernel32.AttachConsole(-1):
-            if sys.stdout is None or getattr(sys.stdout, "closed", False):
-                sys.stdout = open("CONOUT$", "w", encoding="utf-8", errors="replace")
-            if sys.stderr is None or getattr(sys.stderr, "closed", False):
-                sys.stderr = open("CONOUT$", "w", encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-
+# Ensure stdout and stderr exist
 if sys.stdout is None:
-    try:
-        sys.stdout = open(os.devnull, "w", encoding="utf-8")
-    except Exception:
-        pass
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
 if sys.stderr is None:
-    try:
-        sys.stderr = open(os.devnull, "w", encoding="utf-8")
-    except Exception:
-        pass
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
@@ -77,10 +60,21 @@ def main() -> int:
         import PIL
         import mediapipe
         import deepfeik.core.engine
-        print("deepfeik: verification successful")
+        sys.stdout.write("deepfeik: verification successful\n")
+        sys.stdout.flush()
         return 0
 
     _configure_logging(args.verbose)
+
+    # Hide background console window on Windows unless verbose mode was requested
+    if sys.platform == "win32" and not args.verbose:
+        try:
+            import ctypes
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)
+        except Exception:
+            pass
 
     # High-DPI support
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)

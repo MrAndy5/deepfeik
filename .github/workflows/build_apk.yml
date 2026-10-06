@@ -1,4 +1,4 @@
-name: Build Android APK & Create Release
+name: Build Releases (Windows Installer & Android APK)
 
 on:
   push:
@@ -11,9 +11,12 @@ on:
         required: true
         default: "v1.0.0"
 
+permissions:
+  contents: write
+
 jobs:
-  build-apk:
-    name: Build APK on Ubuntu
+  build-android:
+    name: Build Android APK
     runs-on: ubuntu-22.04
 
     steps:
@@ -57,41 +60,100 @@ jobs:
         env:
           ACCEPT_ANDROID_SDK_LICENSE: "yes"
 
-      - name: Find APK
+      - name: Locate APK
         id: find_apk
         run: |
           APK=$(find android/bin -name "*.apk" | head -1)
-          echo "APK_PATH=$APK" >> $GITHUB_OUTPUT
-          echo "APK_NAME=$(basename $APK)" >> $GITHUB_OUTPUT
+          cp "$APK" ./deepfeik-android-arm64.apk
+          echo "APK_PATH=./deepfeik-android-arm64.apk" >> $GITHUB_OUTPUT
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: deepfeik-apk
+          name: deepfeik-android-apk
           path: ${{ steps.find_apk.outputs.APK_PATH }}
 
-      - name: Create GitHub Release
+  build-windows:
+    name: Build Windows App & Installer
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build standalone app with PyInstaller
+        run: |
+          pyinstaller --noconfirm deepfeik.spec
+
+      - name: Create Portable Windows Zip
+        run: |
+          Compress-Archive -Path dist/deepfeik -DestinationPath ./deepfeik-windows-x64-portable.zip
+
+      - name: Upload Windows Portable Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: deepfeik-windows-portable
+          path: ./deepfeik-windows-x64-portable.zip
+
+  publish-release:
+    name: Publish Unified GitHub Release
+    needs: [build-android, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Android Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deepfeik-android-apk
+          path: ./release_assets
+
+      - name: Download Windows Artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: deepfeik-windows-portable
+          path: ./release_assets
+
+      - name: Publish GitHub Release with all assets
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
           name: deepfeik ${{ github.ref_type == 'tag' && github.ref_name || github.event.inputs.tag }}
           body: |
-            ## deepfeik Android APK
+            ## deepfeik Releases
 
-            Real-time face swap for Android 10+ (API 29+).
+            ### 📱 Android APK
+            - **`deepfeik-android-arm64.apk`**: Real-time face swap app for Android 10+ (API 29+).
+            - Install instructions:
+              1. Download `deepfeik-android-arm64.apk`
+              2. Enable **Install unknown apps** in Android Settings
+              3. Open APK and grant Camera / Storage permissions on first launch.
 
-            ### Install
-            1. Download `deepfeik-debug.apk` below
-            2. On your Android device: **Settings → Security → Install unknown apps** → enable
-            3. Open the downloaded APK and install
-            4. Grant camera & storage permissions on first launch
+            ### 💻 Windows Application (x64)
+            - **`deepfeik-windows-x64-portable.zip`**: Standalone executable package for Windows 10/11 (64-bit). No Python installation required.
+            - Install instructions:
+              1. Download and extract `deepfeik-windows-x64-portable.zip`
+              2. Run `deepfeik.exe` inside the folder.
+              3. Live webcam swap with keyboard shortcuts (Ctrl+O, Ctrl+V, Ctrl+R, Esc).
 
-            ### What's inside
-            - Live front camera face swap
-            - Load source face from gallery
-            - MediaPipe FaceMesh + Delaunay warp + LAB color blend
-
-          files: ${{ steps.find_apk.outputs.APK_PATH }}
+            ### 🌟 Features
+            - Resizable dark glassmorphism GUI
+            - Natural mouth opening tracking (no smeared speech artifacts)
+            - Real-time adaptive Reinhard LAB skin tone fitting with EMA smoothing
+            - Real-time video recording (MP4)
+          files: ./release_assets/*
           draft: false
           prerelease: false
         env:

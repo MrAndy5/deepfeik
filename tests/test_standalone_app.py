@@ -24,9 +24,24 @@ def test_packaged_executable_starts():
     
     assert exe_path.stat().st_size > 5 * 1024 * 1024, "Executable is suspiciously small (< 5 MB)"
 
-    # Test launching with --check-install
-    res = subprocess.run([str(exe_path), "--check-install"], capture_output=True, text=True, timeout=60)
-    assert res.returncode == 0, f"Executable failed with code {res.returncode}. Stderr: {res.stderr}. Stdout: {res.stdout}"
+    # Redirect to files instead of anonymous pipes to prevent Windows IPC deadlocks on frozen GUI executables
+    stdout_file = repo_root / "dist" / "test_stdout.log"
+    stderr_file = repo_root / "dist" / "test_stderr.log"
+    with open(stdout_file, "w", encoding="utf-8") as out_f, open(stderr_file, "w", encoding="utf-8") as err_f:
+        res = subprocess.run(
+            [str(exe_path), "--check-install"],
+            stdout=out_f,
+            stderr=err_f,
+            timeout=60,
+        )
+    
+    err_text = stderr_file.read_text(encoding="utf-8", errors="replace") if stderr_file.exists() else ""
+    out_text = stdout_file.read_text(encoding="utf-8", errors="replace") if stdout_file.exists() else ""
+
+    assert res.returncode == 0, (
+        f"Executable failed with returncode {res.returncode}. "
+        f"Stderr: {err_text.strip()}. Stdout: {out_text.strip()}"
+    )
     print("Standalone executable verified: started cleanly and validated installation!")
 
 

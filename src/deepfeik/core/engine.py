@@ -5,6 +5,7 @@ High-level FaceSwapEngine API coordinating landmark tracking,
 piecewise affine warping, LAB color transfer, and feathered blending.
 """
 
+import threading
 from typing import Optional, Tuple
 import cv2
 import numpy as np
@@ -64,6 +65,7 @@ class FaceSwapEngine:
         self._blender = FeatheredAlphaBlender(erode_pixels=2, blur_kernel_size=17)
 
         # Active source face state
+        self._lock = threading.Lock()
         self._source_face_loaded: bool = False
         self._source_image: Optional[np.ndarray] = None
         self._source_landmarks: Optional[np.ndarray] = None
@@ -123,25 +125,33 @@ class FaceSwapEngine:
         self._source_oval = result.face_oval
 
         # Pre-compute and cache face mask and color transfer statistics
-        self._source_mask = self._blender.create_binary_mask(
+        source_mask = self._blender.create_binary_mask(
             bgr_img.shape[:2], result.face_oval
         )
-        self._warper.set_source(bgr_img, result.canonical_px)
-        self._color_matcher.set_source_stats(bgr_img, self._source_mask)
-        self._source_face_loaded = True
+
+        with self._lock:
+            self._source_image = bgr_img
+            self._source_landmarks = result.canonical_px
+            self._source_bbox = result.bbox
+            self._source_oval = result.face_oval
+            self._source_mask = source_mask
+            self._warper.set_source(bgr_img, result.canonical_px)
+            self._color_matcher.set_source_stats(bgr_img, source_mask)
+            self._source_face_loaded = True
 
         return True, "Source face loaded successfully."
 
     def clear_source_face(self) -> None:
         """Clears active source face; process_frame reverts to passthrough."""
-        self._source_face_loaded = False
-        self._source_image = None
-        self._source_landmarks = None
-        self._source_bbox = None
-        self._source_oval = None
-        self._source_mask = None
-        self._warper.clear_source()
-        self._color_matcher.clear_source_stats()
+        with self._lock:
+            self._source_face_loaded = False
+            self._source_image = None
+            self._source_landmarks = None
+            self._source_bbox = None
+            self._source_oval = None
+            self._source_mask = None
+            self._warper.clear_source()
+            self._color_matcher.clear_source_stats()
 
     def is_source_loaded(self) -> bool:
         """Returns True if a valid source face is currently loaded."""
@@ -163,24 +173,24 @@ class FaceSwapEngine:
         if frame is None or frame.size == 0:
             return frame
 
-        # Passthrough if no source face loaded
-        if not self._source_face_loaded:
-            return frame
+        with self._lock:
+            if not self._source_face_loaded or not self._warper.has_cached_source():
+                return frame
 
-        # Detect face in live camera frame using video tracker
-        res: FaceMeshResult = self._video_tracker.process(frame)
-        if not res.has_face or res.canonical_px is None or res.face_oval is None:
-            return frame
+            # Detect face in live camera frame using video tracker
+            res: FaceMeshResult = self._video_tracker.process(frame)
+            if not res.has_face or res.canonical_px is None or res.face_oval is None:
+                return frame
 
-        target_landmarks = res.canonical_px
-        target_oval = res.face_oval
-        target_h, target_w = frame.shape[:2]
+            target_landmarks = res.canonical_px
+            target_oval = res.face_oval
+            target_h, target_w = frame.shape[:2]
 
-        # 1. Warp cached source face to target facial geometry
-        warped = self._warper.warp_to_target(
-            target_landmarks,
-            (target_h, target_w),
-        )
+            # 1. Warp cached source face to target facial geometry
+            warped = self._warper.warp_to_target(
+                target_landmarks,
+                (target_h, target_w),
+            )
 
         # 2. Binary mask for the full face oval
         target_mask = self._blender.create_binary_mask(

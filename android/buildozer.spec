@@ -8,7 +8,7 @@ source.include_exts = py,png,jpg,kv,atlas,json
 source.include_patterns = assets/*,deepfeik/**/*
 
 version = 1.0.0
-requirements = python3==3.11,kivy==2.3.0,opencv==4.8.0,numpy==1.26.0,mediapipe==0.10.14,Pillow==10.4.0
+requirements = python3,kivy,opencv,numpy,Pillow
 
 p4a.local_recipes = ./recipes
 

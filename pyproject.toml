@@ -12,7 +12,7 @@ license = {text = "MIT"}
 
 dependencies = [
     "opencv-python>=4.8",
-    "mediapipe>=0.10,<1.0.0",
+    "mediapipe==0.10.14",
     "numpy>=1.24",
     "PyQt5>=5.15",
     "Pillow>=10.0",

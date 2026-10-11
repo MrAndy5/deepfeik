@@ -12,11 +12,17 @@ import cv2
 import numpy as np
 
 try:
-    import mediapipe.solutions.face_mesh as mp_face_mesh
-except (AttributeError, ModuleNotFoundError):
-    import mediapipe.python.solutions.face_mesh as mp_face_mesh
+    try:
+        import mediapipe.solutions.face_mesh as mp_face_mesh
+    except (AttributeError, ModuleNotFoundError):
+        import mediapipe.python.solutions.face_mesh as mp_face_mesh
+    _HAVE_MEDIAPIPE = True
+except Exception:
+    mp_face_mesh = None
+    _HAVE_MEDIAPIPE = False
 
 from deepfeik.core.landmarks import CanonicalLandmarks
+from deepfeik.core.topology_data import CANONICAL_FACE_NORM
 
 
 @dataclass(frozen=True)
@@ -105,14 +111,45 @@ class FaceMeshTracker:
         self.smoothing_factor = float(smoothing_factor)
 
         self._prev_landmarks: Optional[np.ndarray] = None
+        self._mesh = None
+        self._cascade = None
 
-        self._mesh = mp_face_mesh.FaceMesh(
-            static_image_mode=self.static_mode,
-            max_num_faces=self.max_num_faces,
-            refine_landmarks=self.refine_landmarks,
-            min_detection_confidence=self.min_detection_confidence,
-            min_tracking_confidence=self.min_tracking_confidence,
-        )
+        if _HAVE_MEDIAPIPE and mp_face_mesh is not None:
+            try:
+                self._mesh = mp_face_mesh.FaceMesh(
+                    static_image_mode=self.static_mode,
+                    max_num_faces=self.max_num_faces,
+                    refine_landmarks=self.refine_landmarks,
+                    min_detection_confidence=self.min_detection_confidence,
+                    min_tracking_confidence=self.min_tracking_confidence,
+                )
+            except Exception:
+                self._mesh = None
+
+        if self._mesh is None:
+            # Fallback to OpenCV CascadeClassifier
+            from pathlib import Path
+            this_file = Path(__file__).resolve()
+            cascade_paths = [
+                this_file.parent.parent / "assets" / "haarcascade_frontalface_default.xml",
+                this_file.parent.parent.parent / "assets" / "haarcascade_frontalface_default.xml",
+                Path("assets/haarcascade_frontalface_default.xml"),
+                Path("/sdcard/haarcascade_frontalface_default.xml"),
+            ]
+            for cp in cascade_paths:
+                if cp.exists():
+                    cc = cv2.CascadeClassifier(str(cp))
+                    if not cc.empty():
+                        self._cascade = cc
+                        break
+            if self._cascade is None or self._cascade.empty():
+                try:
+                    if hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
+                        cc = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+                        if not cc.empty():
+                            self._cascade = cc
+                except Exception:
+                    pass
 
     def process(self, frame_bgr: Optional[np.ndarray]) -> FaceMeshResult:
         """Processes a BGR image/frame and extracts face landmarks and bounding box.
@@ -123,7 +160,7 @@ class FaceMeshTracker:
         Returns:
             FaceMeshResult: Object containing detection flag, coordinates, bbox, and contours.
         """
-        if frame_bgr is None or frame_bgr.size == 0 or self._mesh is None:
+        if frame_bgr is None or frame_bgr.size == 0 or (self._mesh is None and self._cascade is None):
             self._prev_landmarks = None
             return FaceMeshResult(has_face=False)
 
@@ -132,7 +169,7 @@ class FaceMeshTracker:
             self._prev_landmarks = None
             return FaceMeshResult(has_face=False)
 
-        # Defensive conversion: Ensure uint8 format for MediaPipe
+        # Defensive conversion: Ensure uint8 format
         if np.issubdtype(frame_bgr.dtype, np.floating):
             if frame_bgr.max() <= 1.0:
                 frame_bgr = np.clip(frame_bgr * 255.0, 0, 255).astype(np.uint8)
@@ -141,36 +178,60 @@ class FaceMeshTracker:
         elif frame_bgr.dtype != np.uint8:
             frame_bgr = frame_bgr.astype(np.uint8)
 
-        # 1. Color conversion: MediaPipe requires RGB input
-        if len(frame_bgr.shape) == 2:
-            rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_GRAY2RGB)
-        elif frame_bgr.shape[2] == 4:
-            rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGRA2RGB)
+        # Path 1: MediaPipe FaceMesh
+        if self._mesh is not None:
+            # 1. Color conversion: MediaPipe requires RGB input
+            if len(frame_bgr.shape) == 2:
+                rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_GRAY2RGB)
+            elif frame_bgr.shape[2] == 4:
+                rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGRA2RGB)
+            else:
+                rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+
+            # 2. Execute FaceMesh inference
+            results = self._mesh.process(rgb_frame)
+
+            if not results.multi_face_landmarks:
+                self._prev_landmarks = None
+                return FaceMeshResult(has_face=False)
+
+            # 3. Handle face selection
+            face_landmarks_list = results.multi_face_landmarks
+            if len(face_landmarks_list) == 1:
+                selected_landmarks = face_landmarks_list[0]
+            else:
+                selected_landmarks = self._select_primary_face(face_landmarks_list)
+
+            # 4. Extract normalized coordinates
+            lms = selected_landmarks.landmark
+            raw_norm = np.array([(lm.x, lm.y) for lm in lms], dtype=np.float32)
+
+            # 5. Denormalize to pixel coordinates (float32)
+            pixel_coords = np.empty_like(raw_norm)
+            pixel_coords[:, 0] = raw_norm[:, 0] * w
+            pixel_coords[:, 1] = raw_norm[:, 1] * h
         else:
-            rgb_frame = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
+            # Path 2: OpenCV CascadeClassifier Fallback
+            gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY) if len(frame_bgr.shape) == 3 else frame_bgr
+            faces = self._cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(60, 60))
+            if len(faces) == 0:
+                self._prev_landmarks = None
+                return FaceMeshResult(has_face=False)
 
-        # 2. Execute FaceMesh inference
-        results = self._mesh.process(rgb_frame)
+            # Select largest face
+            fx, fy, fw, fh = max(faces, key=lambda f: f[2] * f[3])
+            # Fit CANONICAL_FACE_NORM to bounding box
+            min_pt = np.min(CANONICAL_FACE_NORM, axis=0)
+            range_pt = np.max(CANONICAL_FACE_NORM, axis=0) - min_pt
+            unit_face = (CANONICAL_FACE_NORM - min_pt) / range_pt
 
-        if not results.multi_face_landmarks:
-            self._prev_landmarks = None
-            return FaceMeshResult(has_face=False)
+            pixel_coords = np.empty_like(unit_face)
+            pixel_coords[:, 0] = fx + unit_face[:, 0] * fw
+            pixel_coords[:, 1] = fy + unit_face[:, 1] * fh
 
-        # 3. Handle face selection
-        face_landmarks_list = results.multi_face_landmarks
-        if len(face_landmarks_list) == 1:
-            selected_landmarks = face_landmarks_list[0]
-        else:
-            selected_landmarks = self._select_primary_face(face_landmarks_list)
-
-        # 4. Extract normalized coordinates
-        lms = selected_landmarks.landmark
-        raw_norm = np.array([(lm.x, lm.y) for lm in lms], dtype=np.float32)
-
-        # 5. Denormalize to pixel coordinates (float32)
-        pixel_coords = np.empty_like(raw_norm)
-        pixel_coords[:, 0] = raw_norm[:, 0] * w
-        pixel_coords[:, 1] = raw_norm[:, 1] * h
+            raw_norm = np.empty_like(pixel_coords)
+            raw_norm[:, 0] = pixel_coords[:, 0] / max(1.0, float(w))
+            raw_norm[:, 1] = pixel_coords[:, 1] / max(1.0, float(h))
 
         # 6. Apply temporal smoothing if enabled (video mode only)
         if self.smooth_landmarks and self._prev_landmarks is not None and self._prev_landmarks.shape == pixel_coords.shape:

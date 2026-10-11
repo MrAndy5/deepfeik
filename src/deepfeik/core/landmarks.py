@@ -8,7 +8,13 @@ and bounding box geometry for 2D facial landmark warping.
 from typing import Optional, Sequence, Tuple
 import cv2
 import numpy as np
-from scipy.spatial import Delaunay
+
+try:
+    from scipy.spatial import Delaunay
+    _HAVE_SCIPY = True
+except (ImportError, ModuleNotFoundError):
+    Delaunay = None
+    _HAVE_SCIPY = False
 
 
 class CanonicalLandmarks:
@@ -104,8 +110,31 @@ class CanonicalLandmarks:
         if len(landmarks_2d) < 3:
             return np.empty((0, 3), dtype=np.int32)
 
-        tri = Delaunay(landmarks_2d[:, :2])
-        simplices = tri.simplices.astype(np.int32)
+        if _HAVE_SCIPY and Delaunay is not None:
+            tri = Delaunay(landmarks_2d[:, :2])
+            simplices = tri.simplices.astype(np.int32)
+        else:
+            # OpenCV Subdiv2D fallback
+            min_x, min_y = np.min(landmarks_2d[:, :2], axis=0) - 10
+            max_x, max_y = np.max(landmarks_2d[:, :2], axis=0) + 10
+            rect = (int(min_x), int(min_y), int(max_x - min_x + 20), int(max_y - min_y + 20))
+            subdiv = cv2.Subdiv2D(rect)
+            for p in landmarks_2d[:, :2]:
+                subdiv.insert((float(p[0]), float(p[1])))
+            t_list = subdiv.getTriangleList()
+            pts = landmarks_2d[:, :2]
+            simps = []
+            for t in t_list:
+                pt1 = (t[0], t[1])
+                pt2 = (t[2], t[3])
+                pt3 = (t[4], t[5])
+                d1 = np.hypot(pts[:, 0] - pt1[0], pts[:, 1] - pt1[1])
+                d2 = np.hypot(pts[:, 0] - pt2[0], pts[:, 1] - pt2[1])
+                d3 = np.hypot(pts[:, 0] - pt3[0], pts[:, 1] - pt3[1])
+                i1, i2, i3 = int(np.argmin(d1)), int(np.argmin(d2)), int(np.argmin(d3))
+                if len({i1, i2, i3}) == 3 and d1[i1] < 1.0 and d2[i2] < 1.0 and d3[i3] < 1.0:
+                    simps.append([i1, i2, i3])
+            simplices = np.array(simps, dtype=np.int32) if simps else np.empty((0, 3), dtype=np.int32)
 
         if not filter_inside_oval or oval_indices is None or len(oval_indices) < 3:
             return simplices

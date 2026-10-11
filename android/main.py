@@ -3,15 +3,43 @@ deepfeik Android — Real-Time Face Swap
 Kivy-based mobile app using the same core engine as the desktop version.
 
 Entry point for Buildozer (main.py in android/ directory).
+Includes crash logging, graceful error popups, and permission handling.
 """
 
+import datetime
 import os
-import threading
 from pathlib import Path
+import sys
+import threading
+import traceback
 from typing import Optional
 
-import cv2
-import numpy as np
+# Setup early logging directory and crash handler before any UI/native loads
+_CRASH_LOG_PATH = "/sdcard/deepfeik_crash.log" if os.path.exists("/sdcard") else "deepfeik_crash.log"
+
+def _log_to_file(msg: str):
+    try:
+        with open(_CRASH_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
+    except Exception:
+        pass
+
+_log_to_file("=== deepfeik Android starting ===")
+
+def _android_excepthook(exc_type, exc_value, exc_tb):
+    err = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+    _log_to_file(f"UNCAUGHT EXCEPTION:\n{err}")
+    sys.stderr.write(err)
+    sys.stderr.flush()
+
+sys.excepthook = _android_excepthook
+
+try:
+    import cv2
+    import numpy as np
+    _log_to_file(f"OpenCV ({cv2.__version__}) and NumPy ({np.__version__}) loaded successfully.")
+except Exception as e:
+    _log_to_file(f"Error loading cv2/numpy: {e}")
 
 # ── Kivy imports ──────────────────────────────────────────────────────────────
 from kivy.app import App
@@ -22,6 +50,7 @@ from kivy.uix.image import Image as KivyImage
 from kivy.uix.floatlayout import FloatLayout
 from kivy.uix.popup import Popup
 from kivy.uix.filechooser import FileChooserListView
+from kivy.uix.scrollview import ScrollView
 from kivy.clock import Clock
 from kivy.graphics.texture import Texture
 from kivy.core.window import Window
@@ -31,12 +60,18 @@ try:
     from android.permissions import request_permissions, Permission
     from android import activity
     ANDROID = True
+    _log_to_file("Running in ANDROID native environment.")
 except ImportError:
     ANDROID = False
+    _log_to_file("Running in desktop/emulated environment (ANDROID=False).")
 
 # ── Core face swap engine ─────────────────────────────────────────────────────
-# Same engine as desktop — zero GUI dependencies
-from deepfeik.core.engine import FaceSwapEngine
+try:
+    from deepfeik.core.engine import FaceSwapEngine
+    _log_to_file("FaceSwapEngine imported successfully.")
+except Exception as e:
+    _log_to_file(f"Error importing FaceSwapEngine: {traceback.format_exc()}")
+    FaceSwapEngine = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,39 +81,71 @@ from deepfeik.core.engine import FaceSwapEngine
 class CameraReader(threading.Thread):
     """Background thread reading frames from OpenCV camera."""
 
-    def __init__(self, engine: FaceSwapEngine, on_frame_cb):
+    def __init__(self, engine: Optional[FaceSwapEngine], on_frame_cb, on_error_cb):
         super().__init__(daemon=True)
         self._engine = engine
         self._on_frame = on_frame_cb
+        self._on_error = on_error_cb
         self._running = False
         self._cap: Optional[cv2.VideoCapture] = None
 
     def run(self):
         self._running = True
         cam_index = 1 if ANDROID else 0  # Android front camera is usually index 1
-        self._cap = cv2.VideoCapture(cam_index)
-        if not self._cap.isOpened():
-            # Fallback to index 0
-            self._cap = cv2.VideoCapture(0)
+        _log_to_file(f"Attempting to open camera index {cam_index}...")
 
+        try:
+            self._cap = cv2.VideoCapture(cam_index)
+            if not self._cap or not self._cap.isOpened():
+                _log_to_file(f"Camera index {cam_index} failed, trying index 0...")
+                self._cap = cv2.VideoCapture(0)
+        except Exception as e:
+            _log_to_file(f"Exception opening camera: {e}")
+
+        if not self._cap or not self._cap.isOpened():
+            err_msg = "Cannot open camera. Check permissions in device settings."
+            _log_to_file(err_msg)
+            if self._on_error:
+                Clock.schedule_once(lambda dt: self._on_error(err_msg), 0)
+            return
+
+        _log_to_file("Camera opened successfully.")
         self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
+        consecutive_errors = 0
         while self._running:
-            ok, frame = self._cap.read()
-            if not ok or frame is None:
-                continue
-            frame = cv2.flip(frame, 1)  # mirror
-
             try:
-                processed = self._engine.process_frame(frame)
-            except Exception:
-                processed = frame
+                ok, frame = self._cap.read()
+                if not ok or frame is None:
+                    consecutive_errors += 1
+                    if consecutive_errors > 300:
+                        _log_to_file("Camera stopped returning frames.")
+                        break
+                    continue
 
-            self._on_frame(processed)
+                consecutive_errors = 0
+                frame = cv2.flip(frame, 1)  # mirror
+
+                if self._engine is not None:
+                    try:
+                        processed = self._engine.process_frame(frame)
+                    except Exception as e:
+                        processed = frame
+                else:
+                    processed = frame
+
+                self._on_frame(processed)
+            except Exception as e:
+                _log_to_file(f"Error in CameraReader loop: {e}")
+                break
 
         if self._cap:
-            self._cap.release()
+            try:
+                self._cap.release()
+            except Exception:
+                pass
+        _log_to_file("Camera released.")
 
     def stop(self):
         self._running = False
@@ -113,13 +180,26 @@ class DeepfeikWidget(FloatLayout):
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        self._engine = FaceSwapEngine()
+        self._engine: Optional[FaceSwapEngine] = None
         self._camera_reader: Optional[CameraReader] = None
         self._frame_texture: Optional[Texture] = None
         self._latest_frame: Optional[np.ndarray] = None
         self._frame_lock = threading.Lock()
 
         self._build_ui()
+
+        # Safely instantiate core engine
+        try:
+            if FaceSwapEngine is not None:
+                self._engine = FaceSwapEngine()
+                _log_to_file("FaceSwapEngine initialized.")
+            else:
+                self._show_error_popup("Core Engine Missing", "FaceSwapEngine could not be imported.")
+        except Exception as e:
+            err = traceback.format_exc()
+            _log_to_file(f"Error initializing FaceSwapEngine: {err}")
+            self._show_error_popup("Engine Init Error", f"{e}\n\nLog written to:\n{_CRASH_LOG_PATH}")
+
         self._request_permissions()
 
     def _build_ui(self):
@@ -135,16 +215,20 @@ class DeepfeikWidget(FloatLayout):
             color=(*ACCENT[:3], 1),
             font_size="20sp",
             bold=True,
-            size_hint_x=0.6,
+            size_hint_x=0.5,
         )
         self._fps_lbl = Label(
             text="FPS: —",
             color=(*TEXT_DIM[:3], 1),
             font_size="13sp",
-            size_hint_x=0.4,
+            size_hint_x=0.3,
         )
+        btn_logs = _make_button("📋 Logs", size_hint_x=0.2, height="36dp")
+        btn_logs.bind(on_press=self._show_logs_popup)
+
         title_bar.add_widget(lbl)
         title_bar.add_widget(self._fps_lbl)
+        title_bar.add_widget(btn_logs)
         layout.add_widget(title_bar)
 
         # Camera preview
@@ -183,24 +267,86 @@ class DeepfeikWidget(FloatLayout):
 
         self.add_widget(layout)
 
+    def _show_error_popup(self, title: str, message: str):
+        content = BoxLayout(orientation="vertical", spacing=10, padding=12)
+        scroll = ScrollView(size_hint=(1, 0.8))
+        lbl = Label(
+            text=message,
+            color=(1, 0.4, 0.4, 1),
+            font_size="12sp",
+            size_hint_y=None,
+        )
+        lbl.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+        scroll.add_widget(lbl)
+        content.add_widget(scroll)
+
+        btn_close = _make_button("Dismiss", height="44dp")
+        popup = Popup(title=title, content=content, size_hint=(0.9, 0.7))
+        btn_close.bind(on_press=popup.dismiss)
+        content.add_widget(btn_close)
+        popup.open()
+
+    def _show_logs_popup(self, *args):
+        log_content = ""
+        try:
+            if os.path.exists(_CRASH_LOG_PATH):
+                with open(_CRASH_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
+                    log_content = f.read()[-3000:]
+            else:
+                log_content = "No logs generated yet."
+        except Exception as e:
+            log_content = f"Error reading logs: {e}"
+
+        content = BoxLayout(orientation="vertical", spacing=8, padding=10)
+        scroll = ScrollView(size_hint=(1, 0.85))
+        lbl = Label(
+            text=log_content,
+            color=(0.9, 0.9, 0.9, 1),
+            font_size="11sp",
+            size_hint_y=None,
+        )
+        lbl.bind(texture_size=lambda inst, val: setattr(inst, 'height', val[1]))
+        scroll.add_widget(lbl)
+        content.add_widget(scroll)
+
+        btn_close = _make_button("Close", height="44dp")
+        popup = Popup(title=f"deepfeik Logs ({_CRASH_LOG_PATH})", content=content, size_hint=(0.95, 0.85))
+        btn_close.bind(on_press=popup.dismiss)
+        content.add_widget(btn_close)
+        popup.open()
+
     def _request_permissions(self):
         if ANDROID:
-            request_permissions([
+            _log_to_file("Requesting Android runtime permissions...")
+            perms = [
                 Permission.CAMERA,
                 Permission.READ_EXTERNAL_STORAGE,
                 Permission.WRITE_EXTERNAL_STORAGE,
-            ], self._on_permissions_granted)
+            ]
+            if hasattr(Permission, "READ_MEDIA_IMAGES"):
+                perms.append(Permission.READ_MEDIA_IMAGES)
+            try:
+                request_permissions(perms, self._on_permissions_granted)
+            except Exception as e:
+                _log_to_file(f"Error requesting permissions: {e}")
+                self._start_camera()
         else:
             self._start_camera()
 
     def _on_permissions_granted(self, permissions, grants):
-        if all(grants):
+        _log_to_file(f"Permissions granted callback: {grants}")
+        # If camera is granted, proceed
+        if any(grants):
             self._start_camera()
         else:
             self._set_status("Camera permission denied.")
 
     def _start_camera(self):
-        self._camera_reader = CameraReader(self._engine, self._on_new_frame)
+        self._camera_reader = CameraReader(
+            self._engine,
+            self._on_new_frame,
+            on_error_cb=lambda err: self._set_status(f"⚠️ {err}"),
+        )
         self._camera_reader.start()
         Clock.schedule_interval(self._update_display, 1.0 / 30.0)
         self._set_status("Camera active. Load a face photo to begin swap.")
@@ -215,21 +361,25 @@ class DeepfeikWidget(FloatLayout):
         if frame is None:
             return
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        rgb = cv2.flip(rgb, 0)  # Kivy texture is flipped vertically
-        h, w, _ = rgb.shape
+        try:
+            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            rgb = cv2.flip(rgb, 0)  # Kivy texture is flipped vertically
+            h, w, _ = rgb.shape
 
-        if self._frame_texture is None or self._frame_texture.width != w or self._frame_texture.height != h:
-            self._frame_texture = Texture.create(size=(w, h), colorfmt="rgb")
+            if self._frame_texture is None or self._frame_texture.width != w or self._frame_texture.height != h:
+                self._frame_texture = Texture.create(size=(w, h), colorfmt="rgb")
 
-        self._frame_texture.blit_buffer(rgb.tobytes(), colorfmt="rgb", bufferfmt="ubyte")
-        self._cam_image.texture = self._frame_texture
+            self._frame_texture.blit_buffer(rgb.tobytes(), colorfmt="rgb", bufferfmt="ubyte")
+            self._cam_image.texture = self._frame_texture
+        except Exception as e:
+            _log_to_file(f"Error updating display texture: {e}")
 
     def _on_load_face(self, *args):
         """Open file chooser to pick a face photo."""
         content = BoxLayout(orientation="vertical", spacing=8, padding=8)
+        initial_path = "/sdcard" if os.path.exists("/sdcard") else str(Path.home())
         fc = FileChooserListView(
-            path=str(Path.home()),
+            path=initial_path,
             filters=["*.jpg", "*.jpeg", "*.png", "*.bmp", "*.webp"],
         )
         btn_row = BoxLayout(size_hint_y=None, height="48dp", spacing=8)
@@ -257,6 +407,9 @@ class DeepfeikWidget(FloatLayout):
         if bgr is None:
             self._set_status(f"Could not read: {os.path.basename(path)}")
             return
+        if self._engine is None:
+            self._set_status("Engine not loaded.")
+            return
         ok, msg = self._engine.set_source_face(bgr)
         if not ok:
             self._set_status(f"No face detected: {msg}")
@@ -266,7 +419,7 @@ class DeepfeikWidget(FloatLayout):
             self._set_status(f"✅ Face loaded — {os.path.basename(path)}")
 
     def _on_toggle_swap(self, *args):
-        if self._engine.is_source_loaded():
+        if self._engine and self._engine.is_source_loaded():
             self._engine.clear_source_face()
             self._btn_swap.text = "● Swap OFF"
             self._btn_swap.background_color = BTN_BG
@@ -275,7 +428,8 @@ class DeepfeikWidget(FloatLayout):
             self._set_status("Load a face photo first.")
 
     def _on_clear(self, *args):
-        self._engine.clear_source_face()
+        if self._engine:
+            self._engine.clear_source_face()
         self._btn_swap.text = "● Swap OFF"
         self._btn_swap.background_color = BTN_BG
         self._set_status("Face cleared.")
@@ -286,7 +440,9 @@ class DeepfeikWidget(FloatLayout):
     def on_stop(self):
         if self._camera_reader:
             self._camera_reader.stop()
-        self._engine.close()
+        if self._engine:
+            self._engine.close()
+        _log_to_file("=== deepfeik Android stopped cleanly ===")
 
 
 class DeepfeikApp(App):
@@ -299,4 +455,7 @@ class DeepfeikApp(App):
 
 
 if __name__ == "__main__":
-    DeepfeikApp().run()
+    try:
+        DeepfeikApp().run()
+    except Exception as exc:
+        _android_excepthook(*sys.exc_info())

@@ -8,7 +8,7 @@ block_cipher = None
 # Collect all data files, binaries, and hidden imports for mediapipe
 mp_datas, mp_binaries, mp_hidden = collect_all('mediapipe')
 
-datas = mp_datas
+datas = mp_datas + [('src/deepfeik/assets', 'deepfeik/assets')]
 binaries = mp_binaries
 hiddenimports = [
     'PyQt5',
@@ -34,6 +34,8 @@ hiddenimports = [
     'deepfeik.core.face_mesh',
     'deepfeik.core.landmarks',
     'deepfeik.core.warper',
+    'deepfeik.core.gpu',
+    'deepfeik.core.topology_data',
     'deepfeik.pipeline',
     'deepfeik.pipeline.video_source',
     'deepfeik.pipeline.frame_buffer',

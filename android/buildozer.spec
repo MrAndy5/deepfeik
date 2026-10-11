@@ -15,7 +15,7 @@ p4a.local_recipes = ./recipes
 orientation = portrait
 fullscreen = 0
 
-android.permissions = CAMERA,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,INTERNET
+android.permissions = CAMERA,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_IMAGES,INTERNET
 android.api = 34
 android.minapi = 29
 android.ndk = 25b

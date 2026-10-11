@@ -199,8 +199,8 @@ class ReinhardColorMatcher:
         else:
             r_mean, r_std = self.compute_lab_stats(ref_img, ref_mask)
 
-        # Compute scaling and shift for LAB channels
-        scale = r_std / s_std
+        # Compute scaling and shift for LAB channels (clamped to prevent contrast/saturation blowouts)
+        scale = np.clip(r_std / s_std, 0.60, 1.50)
         shift = r_mean - s_mean * scale
 
         # Precompute vectorized 256-entry Look-Up Table for fast SIMD transformation

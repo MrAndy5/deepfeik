@@ -133,6 +133,21 @@ class CameraThread(QThread):
             return
 
         self._stop_event.clear()
+        buffer = LatestFrameBuffer()
+
+        def _capture_worker() -> None:
+            """Continuously drains webcam frames to eliminate hardware buffer queue lag."""
+            while not self._stop_event.is_set():
+                ok, raw = cam.read()
+                if not ok or raw is None:
+                    time.sleep(0.005)
+                    continue
+                buffer.put(raw)
+
+        capture_thread = threading.Thread(
+            target=_capture_worker, daemon=True, name="WebcamCaptureWorker"
+        )
+        capture_thread.start()
 
         # FPS tracking
         fps_frame_count = 0
@@ -140,10 +155,8 @@ class CameraThread(QThread):
 
         try:
             while not self._stop_event.is_set():
-                ok, raw_frame = cam.read()
-                if not ok or raw_frame is None:
-                    # Brief back-off on read failures to avoid busy loop
-                    time.sleep(0.005)
+                raw_frame = buffer.get(timeout=0.05)
+                if raw_frame is None or self._stop_event.is_set():
                     continue
 
                 # Mirror horizontally so it feels like a selfie camera
@@ -180,6 +193,8 @@ class CameraThread(QThread):
         finally:
             # Ensure recording is finalized on unexpected exit
             self.stop_recording()
+            buffer.close()
+            capture_thread.join(timeout=0.5)
             cam.release()
             self._engine.reset()
             logger.info("CameraThread stopped.")

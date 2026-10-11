@@ -1,6 +1,6 @@
 # deepfeik runtime dependencies
 opencv-python>=4.8
-mediapipe>=0.10
+mediapipe>=0.10,<1.0.0
 numpy>=1.24
 PyQt5>=5.15
 Pillow>=10.0

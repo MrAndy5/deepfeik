@@ -6,7 +6,14 @@ Entry point: python -m deepfeik [--camera N]
 
 import argparse
 import logging
+import os
 import sys
+
+# Ensure stdout and stderr exist
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8", errors="replace")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8", errors="replace")
 
 from PyQt5.QtWidgets import QApplication
 from PyQt5.QtCore import Qt
@@ -36,13 +43,52 @@ def main() -> int:
         help="Webcam device index (default: 0)",
     )
     parser.add_argument(
+        "--width",
+        type=int,
+        default=640,
+        metavar="W",
+        help="Webcam capture width in pixels (default: 640)",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=480,
+        metavar="H",
+        help="Webcam capture height in pixels (default: 480)",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose debug logging",
     )
+    parser.add_argument(
+        "--check-install",
+        action="store_true",
+        help="Verify dependencies and core models load properly and exit immediately.",
+    )
     args = parser.parse_args()
 
+    if args.check_install:
+        import cv2
+        import numpy
+        import PIL
+        import mediapipe
+        import deepfeik.core.engine
+        sys.stdout.write("deepfeik: verification successful\n")
+        sys.stdout.flush()
+        return 0
+
     _configure_logging(args.verbose)
+
+    # Hide background console window on Windows unless verbose mode was requested
+    if sys.platform == "win32" and not args.verbose:
+        try:
+            import ctypes
+            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
+            if hwnd:
+                ctypes.windll.user32.ShowWindow(hwnd, 0)
+        except Exception:
+            pass
 
     # High-DPI support
     QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -52,7 +98,7 @@ def main() -> int:
     app.setApplicationName("deepfeik")
     app.setOrganizationName("deepfeik")
 
-    window = MainWindow(device_index=args.camera)
+    window = MainWindow(device_index=args.camera, width=args.width, height=args.height)
     window.show()
 
     return app.exec_()

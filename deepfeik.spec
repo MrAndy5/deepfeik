@@ -21,6 +21,8 @@ hiddenimports = [
     'mediapipe.python',
     'mediapipe.python.solutions',
     'mediapipe.python.solutions.face_mesh',
+    'mediapipe.solutions',
+    'mediapipe.solutions.face_mesh',
     'PIL',
     'scipy',
     'scipy.spatial',

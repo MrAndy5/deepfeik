@@ -39,6 +39,7 @@ android/.buildozer/
 android/bin/
 android/logs/
 *.apk
+*.zip
 
 # Secrets
 .env

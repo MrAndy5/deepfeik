@@ -137,7 +137,7 @@ class FeatheredAlphaBlender:
             )
 
         # Optimized bounding-box ROI path when face_oval_points provided
-        if face_oval_points is not None and len(face_oval_points) >= 3 and alpha_mask is None:
+        if face_oval_points is not None and len(face_oval_points) >= 3:
             pts = np.asarray(face_oval_points, dtype=np.int32)
             rx, ry, rw, rh = cv2.boundingRect(pts)
             if rw <= 0 or rh <= 0:
@@ -155,22 +155,30 @@ class FeatheredAlphaBlender:
             roi_w = x2 - x1
             roi_h = y2 - y1
 
-            # Local mask on ROI
-            local_oval = pts - np.array([x1, y1], dtype=np.int32)
-            roi_mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
-            cv2.fillPoly(roi_mask, [local_oval], 255)
+            if alpha_mask is not None:
+                alpha_roi = alpha_mask[y1:y2, x1:x2]
+                if len(alpha_roi.shape) == 3:
+                    alpha_roi = alpha_roi[:, :, 0]
+                alpha_roi = alpha_roi.astype(np.float32)
+            else:
+                if binary_mask is not None:
+                    roi_mask = binary_mask[y1:y2, x1:x2].copy()
+                else:
+                    local_oval = pts - np.array([x1, y1], dtype=np.int32)
+                    roi_mask = np.zeros((roi_h, roi_w), dtype=np.uint8)
+                    cv2.fillPoly(roi_mask, [local_oval], 255)
 
-            if self._erode_kernel is not None:
-                roi_mask = cv2.erode(roi_mask, self._erode_kernel, iterations=1)
+                if self._erode_kernel is not None:
+                    roi_mask = cv2.erode(roi_mask, self._erode_kernel, iterations=1)
 
-            if self.blur_kernel_size > 1:
-                roi_mask = cv2.GaussianBlur(
-                    roi_mask,
-                    (self.blur_kernel_size, self.blur_kernel_size),
-                    self.sigma,
-                )
+                if self.blur_kernel_size > 1:
+                    roi_mask = cv2.GaussianBlur(
+                        roi_mask,
+                        (self.blur_kernel_size, self.blur_kernel_size),
+                        self.sigma,
+                    )
 
-            alpha_roi = roi_mask.astype(np.float32) * (1.0 / 255.0)
+                alpha_roi = roi_mask.astype(np.float32) * (1.0 / 255.0)
 
             w_roi = warped_face[y1:y2, x1:x2]
             t_roi = target_frame[y1:y2, x1:x2]

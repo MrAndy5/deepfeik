@@ -27,7 +27,7 @@ _MOUTH_LOWER_IDX = 14
 
 # Pixel distance (after denormalization) between the two inner-lip midpoints
 # required to classify the mouth as "open" and trigger the mask cutout.
-_MOUTH_OPEN_PX_THRESHOLD = 6.0
+_MOUTH_OPEN_PX_THRESHOLD = 2.0
 
 
 class FaceSwapEngine:
@@ -56,13 +56,13 @@ class FaceSwapEngine:
             min_detection_confidence=0.35,
             min_tracking_confidence=0.35,
             smooth_landmarks=True,
-            smoothing_factor=0.80,
+            smoothing_factor=0.60,
         )
 
         # Core CV modules
         self._warper = PiecewiseAffineWarper()
         self._color_matcher = ReinhardColorMatcher()
-        self._blender = FeatheredAlphaBlender(erode_pixels=2, blur_kernel_size=17)
+        self._blender = FeatheredAlphaBlender(erode_pixels=6, blur_kernel_size=17)
 
         # Active source face state
         self._lock = threading.Lock()
@@ -193,16 +193,21 @@ class FaceSwapEngine:
             )
 
         # 2. Binary mask for the full face oval
-        target_mask = self._blender.create_binary_mask(
+        outer_mask = self._blender.create_binary_mask(
             (target_h, target_w),
             target_oval,
         )
 
+        # Erode outer boundary first to guarantee ZERO black background bleed from warper
+        if self._blender._erode_kernel is not None:
+            eroded_mask = cv2.erode(outer_mask, self._blender._erode_kernel, iterations=1)
+        else:
+            eroded_mask = outer_mask.copy()
+
         # 3. Mouth-open cutout — fixes speaking artifact.
-        #    When the mouth is open, the inner mouth region should show the
-        #    live camera (teeth/tongue/cavity), NOT the smeared warped face.
-        #    We detect this using full 468 MediaPipe landmarks and punch a
-        #    hole in the blend mask at the inner-lip contour.
+        #    When the mouth is open, the inner mouth region shows the
+        #    live camera frame (teeth / tongue / cavity) cleanly without
+        #    distorting or smearing the warped source texture.
         if res.landmarks_px is not None and len(res.landmarks_px) >= 468:
             lms = res.landmarks_px  # shape (N, 2) float32 pixel coords
 
@@ -211,50 +216,51 @@ class FaceSwapEngine:
             mouth_open_px = float(np.linalg.norm(upper_inner - lower_inner))
 
             if mouth_open_px >= _MOUTH_OPEN_PX_THRESHOLD:
-                # Build inner mouth contour from full-landmark indices
+                # Build inner mouth contour from canonical inner lip landmarks
                 inner_pts = np.array(
                     [lms[i] for i in _LIPS_INNER_MP], dtype=np.int32
                 )
-                # Scale the hole slightly larger than the inner contour so the
-                # effect is visible even at the very edge of the lips.
-                cx = float(inner_pts[:, 0].mean())
-                cy = float(inner_pts[:, 1].mean())
-                scale = 1.0 + min(0.4, mouth_open_px / 60.0)
-                scaled_pts = np.array(
-                    [(cx + (p[0] - cx) * scale, cy + (p[1] - cy) * scale)
-                     for p in inner_pts],
-                    dtype=np.int32,
-                )
-                cv2.fillPoly(target_mask, [scaled_pts.reshape(-1, 1, 2)], 0)
+                cv2.fillPoly(eroded_mask, [inner_pts.reshape(-1, 1, 2)], 0)
 
-        # 4. Per-frame adaptive skin tone matching.
+        # 4. Generate feathered alpha mask
+        if self._blender.blur_kernel_size > 1:
+            alpha = cv2.GaussianBlur(
+                eroded_mask,
+                (self._blender.blur_kernel_size, self._blender.blur_kernel_size),
+                self._blender.sigma,
+            ).astype(np.float32) * (1.0 / 255.0)
+        else:
+            alpha = eroded_mask.astype(np.float32) * (1.0 / 255.0)
+
+        # 5. Per-frame adaptive skin tone matching.
         #    Update EMA-smoothed target LAB stats from the live face region so
         #    the color transfer continuously adapts to the user's current skin
         #    tone and lighting — fixes the "wrong skin tone" mismatch.
         #    alpha=0.15 gives slow, smooth adaptation (no per-frame flicker).
         self._color_matcher.set_target_stats(
             frame,
-            target_mask,
+            outer_mask,
             smooth=True,
             alpha=0.15,
         )
 
-        # 5. LAB Reinhard color matching (uses the freshly updated EMA target stats)
+        # 6. LAB Reinhard color matching (uses the freshly updated EMA target stats)
         warped_matched = self._color_matcher.match(
             warped,
             frame,
-            source_mask=target_mask,
-            target_mask=target_mask,
+            source_mask=outer_mask,
+            target_mask=outer_mask,
             match_source_to_target=True,
             use_cached_target=True,  # use EMA-smoothed stats, not raw per-frame
         )
 
-        # 6. Feathered alpha blending
+        # 7. Feathered alpha blending
         blended = self._blender.blend(
             warped_matched,
             frame,
             face_oval_points=target_oval,
-            binary_mask=target_mask,
+            alpha_mask=alpha,
+            binary_mask=outer_mask,
             mode=self.blend_mode,
         )
 

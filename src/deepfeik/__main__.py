@@ -43,6 +43,20 @@ def main() -> int:
         help="Webcam device index (default: 0)",
     )
     parser.add_argument(
+        "--width",
+        type=int,
+        default=640,
+        metavar="W",
+        help="Webcam capture width in pixels (default: 640)",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=480,
+        metavar="H",
+        help="Webcam capture height in pixels (default: 480)",
+    )
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose debug logging",
@@ -84,7 +98,7 @@ def main() -> int:
     app.setApplicationName("deepfeik")
     app.setOrganizationName("deepfeik")
 
-    window = MainWindow(device_index=args.camera)
+    window = MainWindow(device_index=args.camera, width=args.width, height=args.height)
     window.show()
 
     return app.exec_()

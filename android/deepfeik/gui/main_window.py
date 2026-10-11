@@ -246,7 +246,13 @@ def _make_divider() -> QFrame:
 class MainWindow(QMainWindow):
     """Main application window — modern dark glassmorphism design, fully resizable."""
 
-    def __init__(self, device_index: int = 0, parent=None) -> None:
+    def __init__(
+        self,
+        device_index: int = 0,
+        width: int = 640,
+        height: int = 480,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("deepfeik  •  Real-Time Face Swap")
         self.setMinimumSize(700, 480)
@@ -256,8 +262,8 @@ class MainWindow(QMainWindow):
         self._camera_thread = CameraThread(
             engine=self._engine,
             device_index=device_index,
-            width=1280,
-            height=720,
+            width=width,
+            height=height,
         )
         self._camera_thread.frame_ready.connect(self._on_frame_ready)
         self._camera_thread.fps_updated.connect(self._on_fps_updated)

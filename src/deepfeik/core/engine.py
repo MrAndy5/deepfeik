@@ -14,6 +14,7 @@ from deepfeik.core.face_mesh import FaceMeshTracker, FaceMeshResult, FaceBoundin
 from deepfeik.core.warper import PiecewiseAffineWarper
 from deepfeik.core.color import ReinhardColorMatcher
 from deepfeik.core.blender import FeatheredAlphaBlender
+from deepfeik.core.gpu import configure_gpu_acceleration
 
 # MediaPipe FaceMesh indices for inner lip contour (12 points).
 # Used to cut a hole in the blend mask when the mouth is open so
@@ -43,6 +44,9 @@ class FaceSwapEngine:
             blend_mode: Blending method ('feathered' for fast real-time CPU or 'poisson').
         """
         self.blend_mode = blend_mode
+
+        # Automatically detect and configure dedicated GPU acceleration
+        self.gpu_info = configure_gpu_acceleration()
 
         # Trackers: static for source image, video mode for live webcam stream
         self._static_tracker = FaceMeshTracker(

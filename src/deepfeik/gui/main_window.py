@@ -313,7 +313,7 @@ class MainWindow(QMainWindow):
 
         panel_layout.addWidget(_make_divider())
 
-        # ─── FPS ─────────────────────────────────────────────────────────────
+        # ─── FPS & GPU ────────────────────────────────────────────────────────
         fps_row = QHBoxLayout()
         fps_icon = QLabel("⚡")
         fps_icon.setStyleSheet("font-size: 14px;")
@@ -323,6 +323,15 @@ class MainWindow(QMainWindow):
         fps_row.addWidget(self._fps_label)
         fps_row.addStretch()
         panel_layout.addLayout(fps_row)
+
+        from deepfeik.core.gpu import get_gpu_status_summary
+        gpu_summary = get_gpu_status_summary()
+        self._gpu_badge = QLabel(gpu_summary)
+        self._gpu_badge.setStyleSheet(
+            f"font-size: 10px; color: {_ACCENT_LT if 'GPU:' in gpu_summary else _TEXT_DIM}; font-weight: 600;"
+        )
+        self._gpu_badge.setToolTip("Hardware Acceleration status")
+        panel_layout.addWidget(self._gpu_badge)
 
         panel_layout.addWidget(_make_divider())
 

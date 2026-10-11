@@ -80,6 +80,11 @@ def main() -> int:
 
     _configure_logging(args.verbose)
 
+    # Initialize early GPU environment hints (Optimus/OpenCL/dGPU)
+    from deepfeik.core.gpu import setup_gpu_environment_hints, configure_gpu_acceleration
+    setup_gpu_environment_hints()
+    configure_gpu_acceleration()
+
     # Hide background console window on Windows unless verbose mode was requested
     if sys.platform == "win32" and not args.verbose:
         try:

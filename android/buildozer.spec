@@ -4,10 +4,10 @@ package.name = deepfeik
 package.domain = com.mrAndy5
 
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,json
+source.include_exts = py,png,jpg,kv,atlas,json,xml,npy
 source.include_patterns = assets/*,deepfeik/**/*
 
-version = 1.1.0
+version = 1.1.3
 requirements = python3,kivy,opencv,numpy,Pillow
 
 p4a.local_recipes = ./recipes

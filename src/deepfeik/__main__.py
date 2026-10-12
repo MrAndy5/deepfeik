@@ -177,25 +177,28 @@ def main() -> int:
     app.setApplicationName("deepfeik")
     app.setOrganizationName("deepfeik")
 
-    # If launching normally on Windows, hide background console once Qt app is ready
-    if sys.platform == "win32" and not args.verbose:
-        try:
-            import ctypes
-            hwnd = ctypes.windll.kernel32.GetConsoleWindow()
-            if hwnd:
-                ctypes.windll.user32.ShowWindow(hwnd, 0)
-        except Exception:
-            pass
-
+    logging.info("Initializing main window...")
     window = MainWindow(device_index=args.camera, width=args.width, height=args.height)
     window.show()
 
-    return app.exec_()
+    logging.info("deepfeik application window launched successfully.")
+    exit_code = app.exec_()
+    logging.info("Application exited with code %d", exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":
+    exit_val = 0
     try:
-        sys.exit(main())
+        exit_val = main()
+    except SystemExit as se:
+        exit_val = se.code if se.code is not None else 0
     except Exception as exc:
         _unhandled_exception_hook(*sys.exc_info())
-        sys.exit(1)
+        exit_val = 1
+
+    if exit_val != 0:
+        sys.stderr.write(f"\n[deepfeik] Exited with error code {exit_val}. Log saved to: {_APP_LOG}\n")
+        sys.stderr.flush()
+
+    sys.exit(exit_val)

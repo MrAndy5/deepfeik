@@ -14,15 +14,27 @@ import threading
 import traceback
 from typing import Optional
 
-# Setup early logging directory and crash handler before any UI/native loads
-_CRASH_LOG_PATH = "/sdcard/deepfeik_crash.log" if os.path.exists("/sdcard") else "deepfeik_crash.log"
+# Determine all safe writable log paths on Android
+_LOG_PATHS = []
+try:
+    # 1. App internal private data directory (always writable without permissions on Android)
+    if "ANDROID_ARGUMENT" in os.environ or "PYTHONPATH" in os.environ:
+        _LOG_PATHS.append(os.path.join(os.path.expanduser("~"), "deepfeik_crash.log"))
+        _LOG_PATHS.append("/data/data/com.mrandy5.deepfeik/files/deepfeik_crash.log")
+    # 2. Public storage
+    _LOG_PATHS.append("/sdcard/deepfeik_crash.log")
+    _LOG_PATHS.append("deepfeik_crash.log")
+except Exception:
+    _LOG_PATHS.append("deepfeik_crash.log")
 
 def _log_to_file(msg: str):
-    try:
-        with open(_CRASH_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(f"[{datetime.datetime.now().isoformat()}] {msg}\n")
-    except Exception:
-        pass
+    entry = f"[{datetime.datetime.now().isoformat()}] {msg}\n"
+    for p in _LOG_PATHS:
+        try:
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(entry)
+        except Exception:
+            pass
 
 _log_to_file("=== deepfeik Android starting ===")
 
@@ -198,7 +210,7 @@ class DeepfeikWidget(FloatLayout):
         except Exception as e:
             err = traceback.format_exc()
             _log_to_file(f"Error initializing FaceSwapEngine: {err}")
-            self._show_error_popup("Engine Init Error", f"{e}\n\nLog written to:\n{_CRASH_LOG_PATH}")
+            self._show_error_popup("Engine Init Error", f"{e}\n\nLog written to:\n{_LOG_PATHS[0]}")
 
         self._request_permissions()
 
@@ -288,14 +300,18 @@ class DeepfeikWidget(FloatLayout):
 
     def _show_logs_popup(self, *args):
         log_content = ""
-        try:
-            if os.path.exists(_CRASH_LOG_PATH):
-                with open(_CRASH_LOG_PATH, "r", encoding="utf-8", errors="replace") as f:
-                    log_content = f.read()[-3000:]
-            else:
-                log_content = "No logs generated yet."
-        except Exception as e:
-            log_content = f"Error reading logs: {e}"
+        found_path = ""
+        for p in _LOG_PATHS:
+            try:
+                if os.path.exists(p) and os.path.getsize(p) > 0:
+                    with open(p, "r", encoding="utf-8", errors="replace") as f:
+                        log_content = f.read()[-3000:]
+                    found_path = p
+                    break
+            except Exception:
+                pass
+        if not log_content:
+            log_content = "No logs recorded yet or storage pending permission."
 
         content = BoxLayout(orientation="vertical", spacing=8, padding=10)
         scroll = ScrollView(size_hint=(1, 0.85))
@@ -310,7 +326,7 @@ class DeepfeikWidget(FloatLayout):
         content.add_widget(scroll)
 
         btn_close = _make_button("Close", height="44dp")
-        popup = Popup(title=f"deepfeik Logs ({_CRASH_LOG_PATH})", content=content, size_hint=(0.95, 0.85))
+        popup = Popup(title=f"deepfeik Logs ({found_path or 'internal'})", content=content, size_hint=(0.95, 0.85))
         btn_close.bind(on_press=popup.dismiss)
         content.add_widget(btn_close)
         popup.open()
